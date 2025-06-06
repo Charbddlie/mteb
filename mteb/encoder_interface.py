@@ -15,6 +15,7 @@ Corpus = Union[list[dict[str, str]], dict[str, list[str]]]
 class PromptType(str, Enum):
     query = "query"
     passage = "passage"
+    default = "default"
 
 
 @runtime_checkable

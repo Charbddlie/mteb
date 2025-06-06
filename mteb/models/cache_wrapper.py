@@ -9,10 +9,13 @@ from typing import Any
 import numpy as np
 import torch
 
-from mteb.encoder_interface import Encoder
+from mteb.encoder_interface import Encoder, PromptType
 from mteb.models.wrapper import Wrapper
 
-logger = logging.getLogger(__name__)
+if "__name__" in globals():
+    logger = logging.getLogger(__name__)
+else:
+    logger = logging.getLogger("jupyter")
 
 
 class TextVectorMap:
@@ -25,8 +28,9 @@ class TextVectorMap:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.vectors_file = self.directory / "vectors.npy"
         self.index_file = self.directory / "index.json"
+        self.type_file = self.directory / "type.json"
         self.dimension_file = self.directory / "dimension"
-        self.hash_to_index: dict[str, int] = {}
+        self.hash_to_index_type: dict[str, (int, PromptType)] = {}
         self.vectors: np.memmap | None = None
         self.vector_dim: int | None = None
         self.initial_vectors = initial_vectors
@@ -36,7 +40,7 @@ class TextVectorMap:
     def _hash_text(self, text: str) -> str:
         return hashlib.sha256(text.encode()).hexdigest()
 
-    def add(self, text: str, vector: np.ndarray) -> None:
+    def add(self, text: str, sentence_type: PromptType, vector: np.ndarray) -> None:
         try:
             if self.vector_dim is None:
                 self.vector_dim = vector.shape[0]
@@ -45,20 +49,20 @@ class TextVectorMap:
                 logger.info(f"Initialized vector dimension to {self.vector_dim}")
 
             text_hash = self._hash_text(text)
-            if text_hash in self.hash_to_index:
+            if text_hash in self.hash_to_index_type:
                 logger.warning(
                     "Hash collision or duplicate text. Overwriting existing vector."
                 )
-                index = self.hash_to_index[text_hash]
+                index = self.hash_to_index_type[text_hash][0]
             else:
-                index = len(self.hash_to_index)
+                index = len(self.hash_to_index_type)
                 if index >= len(self.vectors):
                     self._double_vectors_file()
-                self.hash_to_index[text_hash] = index
+                self.hash_to_index_type[text_hash] = (index, sentence_type)
 
             self.vectors[index] = vector
             logger.debug(
-                f"Added new text-vector pair. Total pairs: {len(self.hash_to_index)}"
+                f"Added new text-vector pair. Total pairs: {len(self.hash_to_index_type)}"
             )
         except Exception as e:
             logger.error(f"Error adding text-vector pair: {str(e)}")
@@ -124,13 +128,13 @@ class TextVectorMap:
 
             # Convert hash_to_index dict to a format suitable for JSON
             # JSON doesn't support integer keys, so we keep everything as strings
-            serializable_index = {
-                str(hash_): int(index)  # Ensure indices are serialized as integers
-                for hash_, index in self.hash_to_index.items()
+            serializable_index_type = {
+                str(hash_): f"{index}_{sentence_type}"  # Ensure indices are serialized as integers
+                for hash_, (index, sentence_type) in self.hash_to_index_type.items()
             }
 
             with open(self.index_file, "w", encoding="utf-8") as f:
-                json.dump(serializable_index, f, indent=2)
+                json.dump(serializable_index_type, f, indent=2)
 
             self._save_dimension()
             logger.info(f"Saved TextVectorMap to {self.directory}")
@@ -146,9 +150,11 @@ class TextVectorMap:
                 with open(self.index_file, encoding="utf-8") as f:
                     # Load and convert the JSON data back to the expected format
                     loaded_index = json.load(f)
-                    self.hash_to_index = {
-                        str(hash_): int(index)  # Ensure we maintain the correct types
-                        for hash_, index in loaded_index.items()
+                    self.hash_to_index_type = {
+                        str(hash_): (int(index_sentence_type.split('_')[0]), PromptType(index_sentence_type.split('_')[1]))  # Ensure we maintain the correct types
+                            if len(index_sentence_type.split('_')) == 2 
+                            else (int(index_sentence_type), PromptType.default)
+                        for hash_, index_sentence_type in loaded_index.items()
                     }
 
                 if self.vector_dim is not None:
@@ -176,17 +182,17 @@ class TextVectorMap:
     def get_vector(self, text: str) -> np.ndarray | None:
         try:
             text_hash = self._hash_text(text)
-            if text_hash not in self.hash_to_index:
+            if text_hash not in self.hash_to_index_type:
                 logger.debug(f"Text hash not found in index: {text_hash}")
                 return None
-            index = self.hash_to_index[text_hash]
+            index = self.hash_to_index_type[text_hash][0]
             return self.vectors[index]
         except Exception as e:
             logger.error(f"Error retrieving vector for text: {str(e)}")
             raise
 
     def __contains__(self, text: str) -> bool:
-        return self._hash_text(text) in self.hash_to_index
+        return self._hash_text(text) in self.hash_to_index_type
 
     def __del__(self):
         self.close()
@@ -224,6 +230,9 @@ class CachedEmbeddingWrapper(Wrapper, Encoder):
         _task_name = task_name or "no_task_name"
 
         try:
+            prompt_type = PromptType.default
+            if "prompt_type" in kwargs:
+                prompt_type = PromptType(kwargs["prompt_type"])
             results = []
             uncached_texts = []
             uncached_indices = []
@@ -258,7 +267,7 @@ class CachedEmbeddingWrapper(Wrapper, Encoder):
 
                 # Add new vectors to cache
                 for text, vector in zip(uncached_texts, new_vectors):
-                    self.cache_dict[_task_name].add(text, vector)
+                    self.cache_dict[_task_name].add(text, vector, prompt_type)
                 results.extend(new_vectors)
                 self.cache_dict[_task_name].save()
             else:
