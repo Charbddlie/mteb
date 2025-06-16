@@ -184,8 +184,8 @@ class TextVectorMap:
                 logger.debug(f"Text hash not found in index: {text_hash}")
                 return None
             index = self.hash_to_index[text_hash]
-            if self.W and self.B:
-                return self.vectors[index] @ self.W + self.B
+            if self.W is not None and self.B is not None:
+                return (torch.tensor(self.vectors[index]) @ self.W + self.B).squeeze(0)
             else:
                 return self.vectors[index]
         except Exception as e:
