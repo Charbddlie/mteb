@@ -108,6 +108,13 @@ class DenseRetrievalExactSearch:
     ) -> dict[str, dict[str, float]]:
         logger.info("Encoding Queries.")
         query_ids = list(queries.keys())
+        query_W = kwargs.get("query_W", None)
+        query_B = kwargs.get("query_B", None)
+        passage_W = kwargs.get("passage_W", None)
+        passage_B = kwargs.get("passage_B", None)
+        # with open("/data2/xujw/rep_iso/anisotropy/mteb-tmp.txt", "a") as f:
+        #     from datetime import datetime
+        #     f.write(f"{datetime.now().isoformat()} DenseRetrievalExactSearch {query_W is not None} {query_B is not None} {passage_W is not None} {passage_B is not None}\n")
         self.results = {qid: {} for qid in query_ids}
         queries = [queries[qid] for qid in queries]  # type: ignore
         if instructions:
@@ -126,7 +133,8 @@ class DenseRetrievalExactSearch:
                 prompt_type=PromptType.query,
                 **self.encode_kwargs,
             )
-
+        if query_W is not None and query_B is not None:
+            query_embeddings = query_embeddings @ query_W + query_B
         logger.info("Sorting Corpus by document length (Longest first)...")
         corpus_ids = sorted(
             corpus,
@@ -165,7 +173,8 @@ class DenseRetrievalExactSearch:
                 )
                 if self.save_corpus_embeddings and request_qid:
                     self.corpus_embeddings[request_qid].append(sub_corpus_embeddings)
-
+            if passage_W is not None and passage_B is not None:
+                sub_corpus_embeddings = sub_corpus_embeddings @ passage_W + passage_B
             # Compute similarites using self defined similarity otherwise default to cosine-similarity
             if hasattr(self.model, "similarity"):
                 similarity_scores = self.model.similarity(
@@ -464,6 +473,7 @@ class RetrievalEvaluator(Evaluator):
         self,
         corpus: dict[str, dict[str, str]],
         queries: dict[str, str | list[str]],
+        **kwargs,
     ) -> dict[str, dict[str, float]]:
         if not self.retriever:
             raise ValueError("Model/Technique has not been provided!")
@@ -487,6 +497,7 @@ class RetrievalEvaluator(Evaluator):
                 queries,
                 self.top_k,
                 task_name=self.task_name,  # type: ignore
+                **kwargs,
             )
 
     @staticmethod

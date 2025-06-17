@@ -350,7 +350,7 @@ class AbsTaskRetrieval(AbsTask):
         self, retriever, corpus, queries, relevant_docs, hf_subset: str, **kwargs
     ) -> ScoresDict:
         start_time = time()
-        results = retriever(corpus, queries)
+        results = retriever(corpus, queries, **kwargs)
         end_time = time()
         logger.info(f"Time taken to retrieve: {end_time - start_time:.2f} seconds")
 
